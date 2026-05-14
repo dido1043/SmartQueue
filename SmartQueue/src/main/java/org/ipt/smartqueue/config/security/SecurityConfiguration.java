@@ -55,6 +55,8 @@ public class SecurityConfiguration {
                                 "/api/auth/oauth/exchange",
                                 "/api/auth/logout",
                                 "/swagger-ui/**",
+                                "/swagger-ui.html",
+                                "/v3/api-docs",
                                 "/v3/api-docs/**",
                                 "/error").permitAll()
                         .anyRequest().authenticated()
@@ -79,6 +81,7 @@ public class SecurityConfiguration {
     CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
 
+        configuration.setAllowedOriginPatterns(List.of("*"));
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-XSRF-TOKEN"));
         configuration.setExposedHeaders(List.of("Content-Disposition", "X-Total-Count"));

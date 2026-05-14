@@ -1,0 +1,53 @@
+package org.ipt.smartqueue.service;
+
+import lombok.AllArgsConstructor;
+import org.ipt.smartqueue.data.dto.BusinessDto;
+import org.ipt.smartqueue.data.model.Business;
+import org.ipt.smartqueue.data.model.User;
+import org.ipt.smartqueue.messages.Message;
+import org.ipt.smartqueue.repository.BusinessRepository;
+import org.ipt.smartqueue.repository.UserRepository;
+import org.modelmapper.ModelMapper;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.stereotype.Service;
+
+@Service
+@AllArgsConstructor
+public class BusinessService {
+    private BusinessRepository businessRepository;
+    private UserRepository userRepository;
+    private ModelMapper modelMapper;
+
+    public BusinessDto findByName(String name) {
+        return businessRepository.findByName(name)
+                .orElse(null);
+    }
+
+    public BusinessDto create(BusinessDto businessDto) {
+        String email = SecurityContextHolder.getContext().getAuthentication().getName();
+        User owner = userRepository.findByEmail(email)
+                .orElseThrow(() -> new IllegalStateException("Authenticated user not found"));
+
+        Business business = modelMapper.map(businessDto, Business.class);
+        business.setOwner(owner);
+        businessRepository.save(business);
+        return modelMapper.map(business, BusinessDto.class);
+    }
+    public BusinessDto update(Long id, BusinessDto businessDto) {
+        Business business = businessRepository.findById(id).orElse(null);
+        business.setName(businessDto.getName());
+        business.setActivity(businessDto.getActivity());
+        business.setRating(businessDto.getRating());
+        business.setAvailableDates(businessDto.getAvailableDates());;
+        businessRepository.save(business);
+        return modelMapper.map(business, BusinessDto.class);
+    }
+    public String delete(Long id) {
+        Business business = businessRepository.findById(id).orElse(null);
+        if (business == null) {
+            return Message.BUSINESS_NOT_FOUND;
+        }
+        businessRepository.delete(business);
+        return Message.BUSINESS_DELETED_SUCCESSFULLY;
+    }
+}
