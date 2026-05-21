@@ -1,0 +1,1156 @@
+openapi: 3.0.3
+info:
+  title: SmartQueue API
+  description: |
+    SmartQueue is a queue and appointment booking platform for businesses and clients.
+    It supports email/password authentication, Google OAuth2, JWT-based sessions,
+    role-based access control (ADMIN, OWNER, CLIENT), and real-time event streaming via Kafka.
+
+    ## Authentication
+    Most endpoints require a valid JWT token. The token can be supplied either as an
+    HTTP-only cookie named `jwt` (set automatically on login) or as a Bearer token in
+    the `Authorization` header.
+
+    ## Roles
+    | Role   | Description |
+    |--------|-------------|
+    | ADMIN  | Full system access |
+    | OWNER  | Manages their own businesses and bookings |
+    | CLIENT | Books appointments and receives notifications |
+
+    ## Frontend
+    The web interface is built with **React 18 + Vite** and communicates exclusively
+    through this API. CORS is enabled for the frontend origin with credentials support.
+  version: 1.0.0
+  contact:
+    email: deyan.dudunovski05@gmail.com
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server (Docker Compose)
+
+tags:
+  - name: Authentication
+    description: Register, login, logout and OAuth2 flows
+  - name: Users
+    description: User profile management
+  - name: Businesses
+    description: Business registration and management
+  - name: Bookings
+    description: Appointment booking and status tracking
+  - name: Notifications
+    description: Client notification management
+  - name: Kafka
+    description: Internal event streaming endpoints (testing/admin)
+
+# ---------------------------------------------------------------------------
+# Security Schemes
+# ---------------------------------------------------------------------------
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT obtained from /api/auth/login (also accepted via `jwt` cookie)
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: jwt
+      description: HTTP-only JWT cookie set automatically on successful login
+
+  # -------------------------------------------------------------------------
+  # Reusable Schemas
+  # -------------------------------------------------------------------------
+  schemas:
+
+    # --- Auth ---
+    UserDto:
+      type: object
+      required: [name, email, password, role]
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          example: "Деян Дудуновски"
+        email:
+          type: string
+          format: email
+          example: "deyan@example.com"
+        password:
+          type: string
+          format: password
+          minLength: 8
+          example: "SecurePass123!"
+        role:
+          type: string
+          enum: [ADMIN, OWNER, CLIENT]
+          example: "CLIENT"
+        provider:
+          type: string
+          enum: [EMAIL, GOOGLE]
+          readOnly: true
+          example: "EMAIL"
+
+    LoginRequestDto:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: "deyan@example.com"
+        password:
+          type: string
+          format: password
+          example: "SecurePass123!"
+
+    LoginResponse:
+      type: object
+      properties:
+        userId:
+          type: string
+          format: uuid
+          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        role:
+          type: string
+          enum: [ADMIN, OWNER, CLIENT]
+          example: "CLIENT"
+        expiresIn:
+          type: integer
+          format: int64
+          description: Token lifetime in milliseconds
+          example: 86400000
+
+    # --- Business ---
+    BusinessDto:
+      type: object
+      required: [name, activity, rating]
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 150
+          example: "Фризьорски салон Виктория"
+        activity:
+          type: string
+          minLength: 2
+          maxLength: 100
+          example: "Фризьорство"
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+          description: Business rating validated by @Rating annotation (1–5 inclusive)
+          example: 4
+        availableDates:
+          type: array
+          description: ISO-8601 date-time slots available for booking
+          items:
+            type: string
+            format: date-time
+          example:
+            - "2026-06-01T10:00:00"
+            - "2026-06-01T11:00:00"
+
+    AddAvailableDateRequest:
+      type: object
+      required: [dateTime]
+      properties:
+        dateTime:
+          type: string
+          format: date-time
+          description: A single date-time slot to add to the business calendar
+          example: "2026-06-15T14:30:00"
+
+    # --- Booking ---
+    BookingDto:
+      type: object
+      required: [businessId, bookingTime]
+      properties:
+        id:
+          type: integer
+          format: int64
+          readOnly: true
+          example: 101
+        businessId:
+          type: integer
+          format: int64
+          example: 7
+        clientId:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Populated automatically from the authenticated user
+          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        bookingTime:
+          type: string
+          format: date-time
+          description: Must match one of the business's availableDates
+          example: "2026-06-01T10:00:00"
+        status:
+          type: string
+          enum: [RECEIVED, IN_PROGRESS, CANCELLED, COMPLETED]
+          readOnly: true
+          default: RECEIVED
+          example: "RECEIVED"
+
+    BookingStatusUpdateRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [RECEIVED, IN_PROGRESS, CANCELLED, COMPLETED]
+          example: "IN_PROGRESS"
+
+    # --- Notification ---
+    NotificationDto:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          readOnly: true
+          example: 55
+        clientId:
+          type: string
+          format: uuid
+          readOnly: true
+          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        bookingId:
+          type: integer
+          format: int64
+          readOnly: true
+          example: 101
+        message:
+          type: string
+          example: "Your booking at Фризьорски салон Виктория has been confirmed."
+
+    # --- Errors ---
+    ErrorResponse:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+          example: 400
+        error:
+          type: string
+          example: "Bad Request"
+        message:
+          type: string
+          example: "Validation failed"
+        path:
+          type: string
+          example: "/api/business"
+
+    ValidationErrorResponse:
+      allOf:
+        - $ref: '#/components/schemas/ErrorResponse'
+        - type: object
+          properties:
+            fieldErrors:
+              type: object
+              additionalProperties:
+                type: string
+              example:
+                rating: "must be between 1 and 5"
+                name: "must not be blank"
+
+  # -------------------------------------------------------------------------
+  # Reusable Responses
+  # -------------------------------------------------------------------------
+  responses:
+    Unauthorized:
+      description: Missing or invalid JWT token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: 401
+            error: "Unauthorized"
+            message: "Full authentication is required"
+    Forbidden:
+      description: Authenticated but insufficient role/permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: 403
+            error: "Forbidden"
+            message: "Access Denied"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: 404
+            error: "Not Found"
+            message: "Resource not found"
+    ValidationError:
+      description: Request body failed validation
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationErrorResponse'
+
+# ===========================================================================
+# Paths
+# ===========================================================================
+paths:
+
+  # =========================================================================
+  # Authentication
+  # =========================================================================
+  /api/auth/register:
+    post:
+      tags: [Authentication]
+      summary: Register a new user
+      description: |
+        Creates a new user account with the `EMAIL` provider and a BCrypt-hashed password.
+        The `role` field determines the initial permissions granted to the account.
+
+        **Validations:**
+        - `name` – required, 2–100 characters
+        - `email` – required, valid e-mail format, must be unique in the system
+        - `password` – required, minimum 8 characters
+        - `role` – required, one of ADMIN / OWNER / CLIENT
+      operationId: registerUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserDto'
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserDto'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          description: E-mail already in use
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/login:
+    post:
+      tags: [Authentication]
+      summary: Login with email and password
+      description: |
+        Authenticates the user and returns a JWT token in an **HTTP-only, Secure,
+        SameSite=Strict** cookie named `jwt`. The response body also contains metadata
+        about the token and user.
+
+        **Cookie details:**
+        - `Max-Age` = `expiresIn / 1000` seconds
+        - Path = `/`
+        - Flags: HttpOnly, Secure, SameSite=Strict
+      operationId: loginUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequestDto'
+      responses:
+        '200':
+          description: Authentication successful
+          headers:
+            Set-Cookie:
+              description: HttpOnly JWT cookie
+              schema:
+                type: string
+                example: "jwt=eyJ…; Max-Age=86400; Path=/; HttpOnly; Secure; SameSite=Strict"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/logout:
+    post:
+      tags: [Authentication]
+      summary: Logout current user
+      description: |
+        Invalidates the active session and clears the `jwt` cookie by setting
+        its `Max-Age` to 0.
+      operationId: logoutUser
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Logged out successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/oauth2/login:
+    get:
+      tags: [Authentication]
+      summary: Initiate Google OAuth2 login
+      description: |
+        Redirects the browser to Google's OAuth2 authorization page. After the user
+        grants consent, Google redirects back to the application's callback URL.
+        The authorization request is stored in an HTTP-only cookie for CSRF protection.
+      operationId: oauth2Login
+      responses:
+        '302':
+          description: Redirect to Google OAuth2 authorization endpoint
+          headers:
+            Location:
+              schema:
+                type: string
+              example: "https://accounts.google.com/o/oauth2/auth?…"
+
+  /api/auth/oauth/exchange:
+    get:
+      tags: [Authentication]
+      summary: Exchange OAuth2 authorization code for JWT
+      description: |
+        Called by the frontend after Google redirects back with an authorization code.
+        Exchanges the code for a Google access token, loads or creates the corresponding
+        user, and sets the `jwt` cookie identically to the password-login flow.
+      operationId: oauth2Exchange
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Authorization code returned by Google
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+          description: CSRF state token (validated server-side)
+      responses:
+        '200':
+          description: OAuth2 login successful – JWT cookie set
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          description: Invalid or expired authorization code
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # =========================================================================
+  # Users
+  # =========================================================================
+  /api/users/{id}:
+    get:
+      tags: [Users]
+      summary: Get user by ID
+      description: |
+        Returns the profile of the requested user.
+
+        **Access rules:**
+        - A CLIENT/OWNER can only fetch their own profile.
+        - ADMIN can fetch any user's profile.
+      operationId: getUserById
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: UUID of the target user
+      responses:
+        '200':
+          description: User profile returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserDto'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      tags: [Users]
+      summary: Update user profile
+      description: |
+        Updates the mutable fields of a user account (`name`, `password`).
+        Email and role changes require ADMIN privileges.
+
+        **Validations:**
+        - `name` – 2–100 characters when provided
+        - `password` – minimum 8 characters when provided; stored as BCrypt hash
+      operationId: updateUser
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserDto'
+      responses:
+        '200':
+          description: Updated user profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserDto'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags: [Users]
+      summary: Delete a user (ADMIN only)
+      description: Permanently deletes the user account and all associated data.
+      operationId: deleteUser
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: User deleted successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/users:
+    get:
+      tags: [Users]
+      summary: List all users (ADMIN only)
+      description: Returns a paginated list of all registered users.
+      operationId: listUsers
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: role
+          in: query
+          schema:
+            type: string
+            enum: [ADMIN, OWNER, CLIENT]
+          description: Filter by role
+      responses:
+        '200':
+          description: Paginated user list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/UserDto'
+                  totalElements:
+                    type: integer
+                    example: 42
+                  totalPages:
+                    type: integer
+                    example: 3
+                  page:
+                    type: integer
+                    example: 0
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # =========================================================================
+  # Businesses
+  # =========================================================================
+  /api/business/{name}:
+    get:
+      tags: [Businesses]
+      summary: Get business by name
+      description: |
+        Retrieves a single business by its unique name. This endpoint is publicly
+        accessible (no authentication required).
+      operationId: getBusinessByName
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "Фризьорски салон Виктория"
+      responses:
+        '200':
+          description: Business found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BusinessDto'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/business:
+    post:
+      tags: [Businesses]
+      summary: Create a new business
+      description: |
+        Registers a new business. The authenticated user is automatically set as the
+        **owner** of the business.
+
+        **Access rules:** OWNER or ADMIN only.
+
+        **Validations:**
+        - `name` – required, 2–150 characters, must be unique across all businesses
+        - `activity` – required, 2–100 characters
+        - `rating` – required, integer between 1 and 5 (validated by `@Rating` annotation)
+        - `availableDates` – optional list of ISO-8601 date-time strings; each must be
+          a future date-time
+      operationId: createBusiness
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BusinessDto'
+      responses:
+        '201':
+          description: Business created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BusinessDto'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: A business with that name already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/business/{id}:
+    put:
+      tags: [Businesses]
+      summary: Update business details
+      description: |
+        Replaces all mutable fields of an existing business.
+
+        **Access rules:** The business owner or ADMIN only.
+
+        **Validations:** Same as create (all fields required and individually validated).
+      operationId: updateBusiness
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+          example: 7
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BusinessDto'
+      responses:
+        '200':
+          description: Business updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BusinessDto'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags: [Businesses]
+      summary: Delete a business
+      description: |
+        Deletes a business and all its associated bookings and notifications.
+
+        **Access rules:** The business owner or ADMIN only.
+      operationId: deleteBusiness
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+          example: 7
+      responses:
+        '200':
+          description: Business deleted or not-found message
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "Business deleted successfully"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/business/add/{id}:
+    post:
+      tags: [Businesses]
+      summary: Add an available time slot
+      description: |
+        Appends a single date-time slot to a business's availability calendar.
+        The slot must be in the future.
+
+        **Access rules:** The business owner or ADMIN only.
+
+        **Validations:**
+        - `dateTime` – required, must be a future ISO-8601 date-time
+        - The same slot cannot be added twice (duplicate check)
+      operationId: addAvailableDate
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+          example: 7
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddAvailableDateRequest'
+      responses:
+        '200':
+          description: Updated business with the new slot included
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BusinessDto'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # =========================================================================
+  # Bookings
+  # =========================================================================
+  /api/booking:
+    post:
+      tags: [Bookings]
+      summary: Create a booking
+      description: |
+        Books an available time slot for the authenticated client.
+
+        **Access rules:** CLIENT or ADMIN only.
+
+        **Validations:**
+        - `businessId` – required, must reference an existing business
+        - `bookingTime` – required, must exactly match one of the business's
+          `availableDates`; the slot is removed from the available list after booking
+        - A client may not book the same business slot twice (idempotency check)
+
+        **Side effects:**
+        - The booked slot is removed from `business.availableDates`
+        - A `Notification` is created for the client
+        - A `business-events` Kafka message is published with the booking details
+      operationId: createBooking
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookingDto'
+      responses:
+        '201':
+          description: Booking created with status RECEIVED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingDto'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Business or time slot not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Slot already booked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/booking/client/{clientId}:
+    get:
+      tags: [Bookings]
+      summary: Get all bookings for a client
+      description: |
+        Returns all bookings belonging to the specified client.
+
+        **Access rules:** The client themselves or ADMIN only.
+      operationId: getBookingsByClient
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [RECEIVED, IN_PROGRESS, CANCELLED, COMPLETED]
+          description: Optional status filter
+      responses:
+        '200':
+          description: List of bookings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BookingDto'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/booking/business/{businessId}:
+    get:
+      tags: [Bookings]
+      summary: Get all bookings for a business
+      description: |
+        Returns all bookings for a given business.
+
+        **Access rules:** The business owner or ADMIN only.
+      operationId: getBookingsByBusiness
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: businessId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [RECEIVED, IN_PROGRESS, CANCELLED, COMPLETED]
+          description: Optional status filter
+      responses:
+        '200':
+          description: List of bookings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BookingDto'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/booking/{id}/status:
+    put:
+      tags: [Bookings]
+      summary: Update booking status
+      description: |
+        Changes the status of a booking following the allowed state machine:
+
+        ```
+        RECEIVED → IN_PROGRESS → COMPLETED
+                 ↘             ↗
+                   CANCELLED
+        ```
+
+        **Access rules:**
+        - OWNER / ADMIN: can set any valid transition
+        - CLIENT: may only cancel their own RECEIVED bookings
+
+        **Side effects:**
+        - Status change triggers a Kafka event on `business-events`
+        - A new `Notification` is sent to the client
+      operationId: updateBookingStatus
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+          example: 101
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookingStatusUpdateRequest'
+      responses:
+        '200':
+          description: Updated booking
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingDto'
+        '400':
+          description: Invalid status transition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/booking/{id}:
+    delete:
+      tags: [Bookings]
+      summary: Delete (cancel) a booking
+      description: |
+        Hard-deletes a booking record.
+
+        **Access rules:** ADMIN only. Clients should use the status update endpoint
+        to cancel a booking instead.
+      operationId: deleteBooking
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+          example: 101
+      responses:
+        '204':
+          description: Booking deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # =========================================================================
+  # Notifications
+  # =========================================================================
+  /api/notification/client/{clientId}:
+    get:
+      tags: [Notifications]
+      summary: Get notifications for a client
+      description: |
+        Returns all notifications belonging to the specified client, ordered by
+        most recent first.
+
+        **Access rules:** The client themselves or ADMIN only.
+      operationId: getNotificationsByClient
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: List of notifications
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NotificationDto'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/notification/{id}:
+    delete:
+      tags: [Notifications]
+      summary: Delete a notification
+      description: |
+        Permanently removes a notification.
+
+        **Access rules:** The owning client or ADMIN only.
+      operationId: deleteNotification
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+          example: 55
+      responses:
+        '204':
+          description: Notification deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # =========================================================================
+  # Kafka (internal / admin)
+  # =========================================================================
+  /api/kafka/send:
+    post:
+      tags: [Kafka]
+      summary: Publish a raw message to the business-events topic
+      description: |
+        Publishes a plain-text message directly to the `business-events` Kafka topic.
+        Intended for **testing and administrative** purposes only; not used in the
+        normal booking flow.
+
+        This endpoint is currently **publicly accessible** (no authentication required)
+        for development convenience. In production it must be secured.
+
+        **Parameters:**
+        - `message` (query string) – the payload to publish; required, max 4 KB
+      operationId: sendKafkaMessage
+      parameters:
+        - name: message
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 4096
+          example: "test-event-payload"
+      responses:
+        '200':
+          description: Message sent confirmation
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "Message sent to Kafka topic: business-events"
+        '400':
+          description: Missing or oversized message
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
